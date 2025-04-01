@@ -1,3 +1,4 @@
+import get from 'lodash/get';
 import type {
 	IDataObject,
 	IExecuteFunctions,
@@ -7,11 +8,11 @@ import type {
 	IRequestOptions,
 	IWebhookFunctions,
 } from 'n8n-workflow';
-
 import { NodeOperationError } from 'n8n-workflow';
 
-import get from 'lodash/get';
+import type { SendAndWaitMessageBody } from './MessageInterface';
 import { getSendAndWaitConfig } from '../../../utils/sendAndWait/utils';
+import { createUtmCampaignLink } from '../../../utils/utilities';
 
 export async function slackApiRequest(
 	this: IExecuteFunctions | ILoadOptionsFunctions | IWebhookFunctions,
@@ -79,6 +80,16 @@ export async function slackApiRequest(
 					level: 'warning',
 				},
 			);
+		} else if (response.error === 'not_admin') {
+			throw new NodeOperationError(
+				this.getNode(),
+				'Need higher Role Level for this Operation (e.g. Owner or Admin Rights)',
+				{
+					description:
+						'Hint: Check the Role of your Slack App Integration. For more information see the Slack Documentation - https://slack.com/help/articles/360018112273-Types-of-roles-in-Slack',
+					level: 'warning',
+				},
+			);
 		}
 
 		throw new NodeOperationError(
@@ -86,6 +97,7 @@ export async function slackApiRequest(
 			'Slack error response: ' + JSON.stringify(response.error),
 		);
 	}
+
 	if (response.ts !== undefined) {
 		Object.assign(response, { message_timestamp: response.ts });
 		delete response.ts;
@@ -112,7 +124,7 @@ export async function slackApiRequestAllItems(
 	if (endpoint.includes('files.list')) {
 		query.count = 100;
 	} else {
-		query.limit = 100;
+		query.limit = query.limit ?? 100;
 	}
 	do {
 		responseData = await slackApiRequest.call(this, method, endpoint, body as IDataObject, query);
@@ -254,7 +266,7 @@ export function createSendAndWaitMessageBody(context: IExecuteFunctions) {
 
 	const config = getSendAndWaitConfig(context);
 
-	const body: IDataObject = {
+	const body: SendAndWaitMessageBody = {
 		channel: target,
 		blocks: [
 			{
@@ -263,7 +275,7 @@ export function createSendAndWaitMessageBody(context: IExecuteFunctions) {
 			{
 				type: 'section',
 				text: {
-					type: 'plain_text',
+					type: context.getNode().typeVersion > 2.2 ? 'mrkdwn' : 'plain_text',
 					text: config.message,
 					emoji: true,
 				},
@@ -295,6 +307,23 @@ export function createSendAndWaitMessageBody(context: IExecuteFunctions) {
 			},
 		],
 	};
+
+	if (config.appendAttribution) {
+		const instanceId = context.getInstanceId();
+		const attributionText = 'This message was sent automatically with ';
+		const link = createUtmCampaignLink('n8n-nodes-base.slack', instanceId);
+		body.blocks.push({
+			type: 'section',
+			text: {
+				type: 'mrkdwn',
+				text: `${attributionText} _<${link}|n8n>_`,
+			},
+		});
+	}
+
+	if (context.getNode().typeVersion > 2.2 && body.blocks?.[1]?.type === 'section') {
+		delete body.blocks[1].text.emoji;
+	}
 
 	return body;
 }
